@@ -8,4 +8,4 @@ DOCKER_REPO="readytalk/route53-healthcheck-status"
 mkdir -p bin
 
 # Build the binary in Docker and extract it from the container
-docker build --build-arg VERSION=${VERSION} --build-arg GOOS=${GOOS} -t ${DOCKER_REPO}:${VERSION}-${GOOS} ../
+docker build --build-arg VERSION=${VERSION} --build-arg GOOS=${GOOS} -t ${DOCKER_REPO}:${VERSION}-${GOOS} ./
