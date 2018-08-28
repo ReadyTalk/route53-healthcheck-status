@@ -23,6 +23,15 @@ spec:
         - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: AWS_ACCESS_KEY_ID_FETCH
+              value: {{ .Values.AWS_ACCESS_KEY_ID_FETCH | quote }}
+            - name: AWS_SECRET_ACCESS_KEY_FETCH
+              value: {{ .Values.AWS_SECRET_ACCESS_KEY_FETCH | quote }}
+            - name: AWS_ACCESS_KEY_ID_POST
+              value: {{ .Values.AWS_ACCESS_KEY_ID_POST | quote }}
+            - name: AWS_SECRET_ACCESS_KEY_POST
+              value: {{ .Values.AWS_SECRET_ACCESS_KEY_POST | quote }}
           volumeMounts:
           - name: config-volume
             mountPath: /config.json

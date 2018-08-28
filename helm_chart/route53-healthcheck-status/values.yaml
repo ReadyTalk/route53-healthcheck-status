@@ -17,4 +17,9 @@ resources:
    cpu: 100m
    memory: 64Mi
 
+AWS_ACCESS_KEY_ID_FETCH: ""
+AWS_SECRET_ACCESS_KEY_FETCH: ""
+AWS_ACCESS_KEY_ID_POST: ""
+AWS_SECRET_ACCESS_KEY_POST: ""
+
 config: ""
