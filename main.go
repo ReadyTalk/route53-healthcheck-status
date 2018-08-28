@@ -27,8 +27,6 @@ type Service struct {
 	Name string
   DisplayName string
   Environments []Environment
-  Health int
-  Reason string
 }
 
 type EnvironmentSpec struct {
@@ -63,10 +61,17 @@ type Specification struct {
   ServiceSpecs []ServiceSpec `json:"Services"`
 }
 
+type HealthCheck struct {
+  Health int
+  Reason string
+}
+
 var Spec Specification
 var cw *cloudwatch.CloudWatch
 var r53 *route53.Route53
 var s3service *s3.S3
+var healthChecks map[string]HealthCheck
+var services []Service
 
 func main () {
 
@@ -115,12 +120,22 @@ func main () {
 }
 
 func run () {
+  var services []Service
   for _, serviceSpec := range Spec.ServiceSpecs {
-    getService(&serviceSpec)
+    healthChecks = make(map[string]HealthCheck)
+    services = append(services, getService(&serviceSpec))
   }
+
+  output, err := json.Marshal(services)
+  if err != nil {
+    log.Error("Unable to create JSON output", err)
+  }
+
+  path := "data/data.json"
+  postToS3(output, &path)
 }
 
-func getService(serviceSpec *ServiceSpec) {
+func getService(serviceSpec *ServiceSpec) Service {
 
   service := Service{Name: serviceSpec.Name, DisplayName: serviceSpec.DisplayName}
 
@@ -129,13 +144,7 @@ func getService(serviceSpec *ServiceSpec) {
     getEnvironment(&environmentSpec, &environment)
     service.Environments = append(service.Environments, environment)
   }
-
-  output, err := json.Marshal(service)
-  if err != nil {
-    log.Error("Unable to create JSON output", err)
-  }
-
-  postToS3(output, &serviceSpec.S3DataPath)
+  return service
 }
 
 func getEnvironment (environmentSpec *EnvironmentSpec, environment *Environment) {
@@ -171,34 +180,49 @@ func setInstance (environment *Environment, recordSet *route53.ResourceRecordSet
   healthCheckId := aws.StringValue(recordSet.HealthCheckId);
 
   if(healthCheckId != "") {
-    dimensionName := "HealthCheckId"
-    metricName := "HealthCheckStatus"
-    namespace := "AWS/Route53"
-    var dimensions []*cloudwatch.Dimension
-    dimensions = append(dimensions, &cloudwatch.Dimension{Name: &dimensionName, Value: &healthCheckId})
-    alarm, err := cw.DescribeAlarmsForMetric(&cloudwatch.DescribeAlarmsForMetricInput{Dimensions: dimensions, MetricName: &metricName, Namespace: &namespace})
 
-    if err != nil {
-      log.Fatal("Error calling DescribeAlarmsForMetric", err)
-    }
-
-    if(len(alarm.MetricAlarms) > 0) {
-      if(aws.StringValue(alarm.MetricAlarms[0].StateValue) == "OK") {
-        instance.Health = 0
-        instance.Reason = ""
-      } else {
-        instance.Health = 2
-        instance.Reason = "Healthcheck Failing"
-      }
+    // If we already checked this healthcheck's alarm, just use that value
+    if _, ok := healthChecks[healthCheckId]; ok {
+      instance.Health = healthChecks[healthCheckId].Health
+      instance.Reason = healthChecks[healthCheckId].Reason
     } else {
-      log.Warn("No Alarm found for healthCheckId ", healthCheckId)
-      instance.Health = 1
-      instance.Reason = "No Alarm Found"
+      dimensionName := "HealthCheckId"
+      metricName := "HealthCheckStatus"
+      namespace := "AWS/Route53"
+      var dimensions []*cloudwatch.Dimension
+      dimensions = append(dimensions, &cloudwatch.Dimension{Name: &dimensionName, Value: &healthCheckId})
+      alarm, err := cw.DescribeAlarmsForMetric(&cloudwatch.DescribeAlarmsForMetricInput{Dimensions: dimensions, MetricName: &metricName, Namespace: &namespace})
+
+      if err != nil {
+        log.Fatal("Error calling DescribeAlarmsForMetric", err)
+      }
+
+      if(len(alarm.MetricAlarms) > 0) {
+        if(aws.StringValue(alarm.MetricAlarms[0].StateValue) == "OK") {
+          instance.Health = 0
+          instance.Reason = ""
+        } else {
+          instance.Health = 2
+          instance.Reason = "Healthcheck Failing"
+        }
+      } else {
+        log.Warn("No Alarm found for healthCheckId ", healthCheckId)
+        instance.Health = 1
+        instance.Reason = "No Alarm Found"
+      }
+
+      // Add the healthcheck result to the list so we don't have to check it again on this run
+      healthChecks[healthCheckId] = HealthCheck{Health: instance.Health, Reason: instance.Reason}
     }
   } else {
     log.Warn("No Healthcheck found for record set ", aws.StringValue(recordSet.Name), " ", aws.StringValue(recordSet.Region))
     instance.Health = 1
     instance.Reason = "No Healthcheck Found"
+  }
+
+  if (instance.Health > environment.Health) {
+    environment.Health = instance.Health
+    environment.Reason = instance.Reason
   }
 
   environment.Instances = append(environment.Instances, instance)

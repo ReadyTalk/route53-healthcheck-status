@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ template "route53-healthcheck-status.fullname" . }}
+  labels:
+    app: {{ template "route53-healthcheck-status.name" . }}
+    chart: {{ template "route53-healthcheck-status.chart" . }}
+    release: {{ .Release.Name }}
+    heritage: {{ .Release.Service }}
+data:
+  config.json: |
+{{ .Values.config | indent 4 }}
