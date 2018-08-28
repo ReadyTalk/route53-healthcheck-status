@@ -7,7 +7,7 @@ replicaCount: 1
 image:
   repository: readytalk/route53-healthcheck-status
   tag: 0.0.1
-  pullPolicy: IfNotPresent
+  pullPolicy: Always
 
 resources:
   limits:
