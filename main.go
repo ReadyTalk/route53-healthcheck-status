@@ -56,7 +56,7 @@ type Specification struct {
   AwsSecretAccessKeyPost string `envconfig:"AWS_SECRET_ACCESS_KEY_POST"`
   ConfigPath string `envconfig:"CONFIG_PATH"`
   AwsDebug bool `envconfig:"AWS_DEBUG"`
-  RunInterval int32 `envconfig:"RUN_INTERVAL"`
+  RunInterval int32 `envconfig:"RUN_INTERVAL" default:"30000"`
   S3BucketPost string `json:"S3BucketPost"`
   ServiceSpecs []ServiceSpec `json:"Services"`
 }
@@ -140,7 +140,7 @@ func getService(serviceSpec *ServiceSpec) Service {
   service := Service{Name: serviceSpec.Name, DisplayName: serviceSpec.DisplayName}
 
   for _, environmentSpec := range serviceSpec.EnvironmentSpecs {
-    environment := Environment{Name: environmentSpec.Name}
+    environment := Environment{Name: environmentSpec.Name, Health: 3, Reason: "No Health Status Found"}
     getEnvironment(&environmentSpec, &environment)
     service.Environments = append(service.Environments, environment)
   }
@@ -220,7 +220,7 @@ func setInstance (environment *Environment, recordSet *route53.ResourceRecordSet
     instance.Reason = "No Healthcheck Found"
   }
 
-  if (instance.Health > environment.Health) {
+  if (instance.Health < environment.Health) {
     environment.Health = instance.Health
     environment.Reason = instance.Reason
   }
