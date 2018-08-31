@@ -71,6 +71,7 @@ var cw *cloudwatch.CloudWatch
 var r53 *route53.Route53
 var s3service *s3.S3
 var healthChecks map[string]HealthCheck
+var cachedHostedZones map[string][]*route53.ResourceRecordSet
 var services []Service
 
 func main () {
@@ -115,15 +116,21 @@ func main () {
   tick := time.Tick(time.Duration(Spec.RunInterval) * time.Millisecond)
   run()
   for range tick {
+    log.Debug("Starting new run")
     run()
   }
 }
 
 func run () {
-  var services []Service
+  var services = make(map[string]Service)
+
+  // Clear out the cache between runs
+  cachedHostedZones = make(map[string][]*route53.ResourceRecordSet)
+
   for _, serviceSpec := range Spec.ServiceSpecs {
     healthChecks = make(map[string]HealthCheck)
-    services = append(services, getService(&serviceSpec))
+    log.Debug("ServiceSpec.Name: ", serviceSpec.Name)
+    services[serviceSpec.Name] = getService(&serviceSpec)
   }
 
   output, err := json.Marshal(services)
@@ -149,32 +156,54 @@ func getService(serviceSpec *ServiceSpec) Service {
 
 func getEnvironment (environmentSpec *EnvironmentSpec, environment *Environment) {
 
-  listResourceRecordSetsInput := route53.ListResourceRecordSetsInput{HostedZoneId: &environmentSpec.HostedZoneId}
-  result, err := r53.ListResourceRecordSets(&listResourceRecordSetsInput)
-
-  if err != nil {
-    if aerr, ok := err.(awserr.Error); ok {
-			if(aerr.Code() == "Throttling") {
-        // Route53 has low throttling thresholds so ignore if being throttled
-        log.Warning("ListResourceRecordSets rate throttled")
-      } else {
-        log.Fatal("Error calling ListResourceRecordSets", err)
+  records, err := fetchHostedZone(&environmentSpec.HostedZoneId)
+  if err == nil {
+    for _, recordSet := range records {
+      if (aws.StringValue(recordSet.Name) == environmentSpec.DomainName+"." && aws.StringValue(recordSet.Type) == "A") {
+        setInstance(environment, recordSet)
       }
-    } else {
-      log.Fatal("Error calling ListResourceRecordSets", err)
     }
-  }
 
-  for _, recordSet := range result.ResourceRecordSets {
-    if (aws.StringValue(recordSet.Name) == environmentSpec.DomainName+"." && aws.StringValue(recordSet.Type) == "A") {
-      setInstance(environment, recordSet)
-    }
+    environment.AsOfTime = int32(time.Now().Unix())
   }
-
-  environment.AsOfTime = int32(time.Now().Unix())
 }
 
-func setInstance (environment *Environment, recordSet *route53.ResourceRecordSet) {
+// Fetches all recordsets from hosted zone either from AWS or from local cache
+// Caches due to AWS limits on Route53 API requests
+// Returns pointer to all recordsets
+func fetchHostedZone(hostedZoneId *string) (records []*route53.ResourceRecordSet, err error) {
+
+  // Get data from the cache if it exists
+  if _, ok := cachedHostedZones[*hostedZoneId]; ok {
+    log.Debug("Hosted zone ", *hostedZoneId, " cached; No fetch needed")
+    return cachedHostedZones[*hostedZoneId], nil
+  } else {
+    log.Debug("Hosted zone ", *hostedZoneId, " not cached; Making call to Route53")
+    listResourceRecordSetsInput := route53.ListResourceRecordSetsInput{HostedZoneId: hostedZoneId}
+    result, err := r53.ListResourceRecordSets(&listResourceRecordSetsInput)
+
+    if err != nil {
+      if aerr, ok := err.(awserr.Error); ok {
+  			if(aerr.Code() == "Throttling") {
+          // Route53 has low throttling thresholds so ignore if being throttled
+          log.Warning("ListResourceRecordSets rate throttled")
+        } else {
+          log.Warning("Error calling ListResourceRecordSets", err)
+          return nil, err
+        }
+      } else {
+        log.Warning("Error calling ListResourceRecordSets", err)
+        return nil, err
+      }
+    }
+
+    cachedHostedZones[*hostedZoneId] = result.ResourceRecordSets
+  }
+
+  return cachedHostedZones[*hostedZoneId], nil
+}
+
+func setInstance(environment *Environment, recordSet *route53.ResourceRecordSet) {
 
   instance := Instance{Name: aws.StringValue(recordSet.Region)}
   healthCheckId := aws.StringValue(recordSet.HealthCheckId);
